@@ -5,7 +5,7 @@ const cors = require('cors')
 const cookieParser = require('cookie-parser')
 const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb')
 const jwt = require('jsonwebtoken')
-
+const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY)
 const port = process.env.PORT || 8000
 
 // middleware
@@ -91,30 +91,361 @@ async function run() {
 run().catch(console.dir)
 
 const roomsCollection = client.db('stayVista').collection("rooms")
+const usersCollection = client.db('stayVista').collection("users")
+const bookingsCollection = client.db('stayVista').collection("bookings")
 
 app.get('/', (req, res) => {
   res.send('Hello from StayVista Server..')
 })
 
+// verify admin middleware
+const verifyAdmin = async (req, res, next) => {
+  console.log('hello')
+  const user = req.user
+  const query = { email: user?.email }
+  const result = await usersCollection.findOne(query)
+  console.log(result?.role)
+  if (!result || result?.role !== 'admin')
+    return res.status(401).send({ message: 'unauthorized access!!' })
+
+  next()
+}
+// verify host middleware
+const verifyHost = async (req, res, next) => {
+  console.log('hello')
+  const user = req.user
+  const query = { email: user?.email }
+  const result = await usersCollection.findOne(query)
+  console.log(result?.role)
+  if (!result || result?.role !== 'host') {
+    return res.status(401).send({ message: 'unauthorized access!!' })
+  }
+
+  next()
+}
+
+ // create-payment-intent
+ app.post('/create-payment-intent', verifyToken, async (req, res) => {
+  const price = req.body.price
+  const priceInCent = parseFloat(price) * 100
+  if (!price || priceInCent < 1) return
+  // generate clientSecret
+  const { client_secret } = await stripe.paymentIntents.create({
+    amount: priceInCent,
+    currency: 'usd',
+    // In the latest version of the API, specifying the `automatic_payment_methods` parameter is optional because Stripe enables its functionality by default.
+    automatic_payment_methods: {
+      enabled: true,
+    },
+  })
+  // send client secret as response
+  res.send({ clientSecret: client_secret })
+})
+
+ // Save a booking data in db
+ app.post('/booking', verifyToken, async (req, res) => {
+  const bookingData = req.body
+  // save room booking info
+  const result = await bookingsCollection.insertOne(bookingData)
+  res.send(result)
+})
+
+
+// update Room Status
+app.patch('/room/status/:id', async (req, res) => {
+  const id = req.params.id
+  const status = req.body.status
+  // change room availability status
+  const query = { _id: new ObjectId(id) }
+  const updateDoc = {
+    $set: { booked: status },
+  }
+  const result = await roomsCollection.updateOne(query, updateDoc)
+  res.send(result)
+})
+
+// get all booking for a guest
+app.get('/my-bookings/:email', verifyToken, async (req, res) => {
+  const email = req.params.email
+  const query = { 'guest.email': email }
+  const result = await bookingsCollection.find(query).toArray()
+  res.send(result)
+})
+// get all manage booking for a host
+app.get('/my-bookings/:email', verifyToken, async (req, res) => {
+  const email = req.params.email
+  const query = { 'host.email': email }
+  const result = await bookingsCollection.find(query).toArray()
+  res.send(result)
+})
+
+ // delete a booking
+ app.delete('/booking/:id', verifyToken, async (req, res) => {
+  const id = req.params.id
+  const query = { _id: new ObjectId(id) }
+  const result = await bookingsCollection.deleteOne(query)
+  res.send(result)
+})
+// save a user data in db
+app.put('/user', async (req, res) => {
+  const user = req.body
+  const query = { email: user?.email }
+  // check if user already exists in db
+  const isExist = await usersCollection.findOne(query)
+  if (isExist) {
+    if (user.status === 'Requested') {
+      // if existing user try to change his role
+      const result = await usersCollection.updateOne(query, {
+        $set: { status: user?.status },
+      })
+      return res.send(result)
+    } else {
+      // if existing user login again
+      return res.send(isExist)
+    }
+  }
+
+  // save user for the first time
+  const options = { upsert: true }
+  const updateDoc = {
+    $set: {
+      ...user,
+      timestamp: Date.now(),
+    },
+  }
+  const result = await usersCollection.updateOne(query, updateDoc, options)
+  res.send(result)
+})
+
+
+ // get all users data from db
+ app.get('/users', verifyToken,verifyAdmin, async (req, res) => {
+  const result = await usersCollection.find().toArray()
+  res.send(result)
+})
+
+
+// get a user info by email from db
+app.get('/user/:email', async (req, res) => {
+  const email = req.params.email
+  const result = await usersCollection.findOne({ email })
+  res.send(result)
+})
+
+
+//update a user role
+app.patch('/users/update/:email', async (req, res) => {
+  const email = req.params.email
+  const user = req.body
+  const query = { email }
+  const updateDoc = {
+    $set: { ...user, timestamp: Date.now() },
+  }
+  const result = await usersCollection.updateOne(query, updateDoc)
+  res.send(result)
+})
+
+
+ 
+
+
 // fetch rooms data to db
-app.get('/rooms', async(req,res)=>{
+app.get('/rooms', async (req, res) => {
   const category = req.query.category;
   let query = {}
 
-
-  if(category && category !== 'null') query={category}
+  if (category && category !== 'null') query = { category }
   const result = await roomsCollection.find(query).toArray();
   res.send(result)
 })
 
-// fetch single data in db
-app.get('/rooms/:id', async(req,res)=>{
+// Get a single room data from db using _id
+app.get('/room/:id', async (req, res) => {
   const id = req.params.id
-  const query = {_id :new ObjectId(id)}
-  const result = await roomsCollection.findOne(query);
+  const query = { _id: new ObjectId(id) }
+  const result = await roomsCollection.findOne(query)
   res.send(result)
-
 })
+
+// Save a room data in db
+app.post('/room', async (req, res) => {
+  const roomData = req.body
+  const result = await roomsCollection.insertOne(roomData)
+  res.send(result)
+})
+
+// get all rooms for host
+app.get('/my-listings/:email', async (req, res) => {
+  const email = req.params.email
+
+  let query = { 'host.email': email }
+  const result = await roomsCollection.find(query).toArray()
+  res.send(result)
+})
+
+
+// delete a room
+app.delete('/room/:id', async (req, res) => {
+  const id = req.params.id
+  const query = { _id: new ObjectId(id) }
+  const result = await roomsCollection.deleteOne(query)
+  res.send(result)
+})
+
+// update room data
+app.put('/room/update/:id', verifyToken, verifyHost, async (req, res) => {
+  const id = req.params.id
+  const roomData = req.body
+  const query = { _id: new ObjectId(id) }
+  const updateDoc = {
+    $set: roomData,
+  }
+  const result = await roomsCollection.updateOne(query, updateDoc)
+  res.send(result)
+})
+
+
+
+ // Admin Statistics
+ app.get('/admin-stat', verifyToken, verifyAdmin, async (req, res) => {
+  const bookingDetails = await bookingsCollection
+    .find(
+      {},
+      {
+        projection: {
+          date: 1,
+          price: 1,
+        },
+      }
+    )
+    .toArray()
+
+  const totalUsers = await usersCollection.countDocuments()
+  const totalRooms = await roomsCollection.countDocuments()
+  const totalPrice = bookingDetails.reduce(
+    (sum, booking) => sum + booking.price,
+    0
+  )
+  // const data = [
+  //   ['Day', 'Sales'],
+  //   ['9/5', 1000],
+  //   ['10/2', 1170],
+  //   ['11/1', 660],
+  //   ['12/11', 1030],
+  // ]
+  const chartData = bookingDetails.map(booking => {
+    const day = new Date(booking.date).getDate()
+    const month = new Date(booking.date).getMonth() + 1
+    const data = [`${day}/${month}`, booking?.price]
+    return data
+  })
+  chartData.unshift(['Day', 'Sales'])
+  // chartData.splice(0, 0, ['Day', 'Sales'])
+
+  console.log(chartData)
+
+  console.log(bookingDetails)
+  res.send({
+    totalUsers,
+    totalRooms,
+    totalBookings: bookingDetails.length,
+    totalPrice,
+    chartData,
+  })
+})
+
+// Host Statistics
+app.get('/host-stat', verifyToken, verifyHost, async (req, res) => {
+  const { email } = req.user
+  const bookingDetails = await bookingsCollection
+    .find(
+      { 'host.email': email },
+      {
+        projection: {
+          date: 1,
+          price: 1,
+        },
+      }
+    )
+    .toArray()
+
+  const totalRooms = await roomsCollection.countDocuments({
+    'host.email': email,
+  })
+  const totalPrice = bookingDetails.reduce(
+    (sum, booking) => sum + booking.price,
+    0
+  )
+  const { timestamp } = await usersCollection.findOne(
+    { email },
+    { projection: { timestamp: 1 } }
+  )
+
+  const chartData = bookingDetails.map(booking => {
+    const day = new Date(booking.date).getDate()
+    const month = new Date(booking.date).getMonth() + 1
+    const data = [`${day}/${month}`, booking?.price]
+    return data
+  })
+  chartData.unshift(['Day', 'Sales'])
+  // chartData.splice(0, 0, ['Day', 'Sales'])
+
+  console.log(chartData)
+
+  console.log(bookingDetails)
+  res.send({
+    totalRooms,
+    totalBookings: bookingDetails.length,
+    totalPrice,
+    chartData,
+    hostSince: timestamp,
+  })
+})
+
+// Guest Statistics
+app.get('/guest-stat', verifyToken, async (req, res) => {
+  const { email } = req.user
+  const bookingDetails = await bookingsCollection
+    .find(
+      { 'guest.email': email },
+      {
+        projection: {
+          date: 1,
+          price: 1,
+        },
+      }
+    )
+    .toArray()
+
+  const totalPrice = bookingDetails.reduce(
+    (sum, booking) => sum + booking.price,
+    0
+  )
+  const { timestamp } = await usersCollection.findOne(
+    { email },
+    { projection: { timestamp: 1 } }
+  )
+
+  const chartData = bookingDetails.map(booking => {
+    const day = new Date(booking.date).getDate()
+    const month = new Date(booking.date).getMonth() + 1
+    const data = [`${day}/${month}`, booking?.price]
+    return data
+  })
+  chartData.unshift(['Day', 'Sales'])
+  // chartData.splice(0, 0, ['Day', 'Sales'])
+
+  console.log(chartData)
+
+  console.log(bookingDetails)
+  res.send({
+    totalBookings: bookingDetails.length,
+    totalPrice,
+    chartData,
+    guestSince: timestamp,
+  })
+})
+
 
 app.listen(port, () => {
   console.log(`StayVista is running on port ${port}`)
