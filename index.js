@@ -142,6 +142,29 @@ const verifyHost = async (req, res, next) => {
   res.send({ clientSecret: client_secret })
 })
 
+
+// host payment method 
+
+app.post('/create-payment-host', async(req,res)=>{
+  const {price}= req.body;
+  const amount = parseInt(price * 100)
+  console.log(amount)
+  const paymentIntent = await stripe.paymentIntents.create({
+    amount: amount,
+    currency: "usd",
+    payment_method_types:['card'],
+
+    // In the latest version of the API, specifying the `automatic_payment_methods` parameter is optional because Stripe enables its functionality by default.
+    // automatic_payment_methods: {
+    //   enabled: true,
+    // },
+  });
+
+  res.send({
+    clientSecret: paymentIntent.client_secret,
+  });
+})
+
  // Save a booking data in db
  app.post('/booking', verifyToken, async (req, res) => {
   const bookingData = req.body
@@ -445,6 +468,9 @@ app.get('/guest-stat', verifyToken, async (req, res) => {
     guestSince: timestamp,
   })
 })
+
+
+
 
 
 app.listen(port, () => {
