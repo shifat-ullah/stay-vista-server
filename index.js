@@ -148,7 +148,7 @@ const verifyHost = async (req, res, next) => {
 app.post('/create-payment-host', async(req,res)=>{
   const {price}= req.body;
   const amount = parseInt(price * 100)
-  console.log(amount)
+  // console.log(amount)
   const paymentIntent = await stripe.paymentIntents.create({
     amount: amount,
     currency: "usd",
