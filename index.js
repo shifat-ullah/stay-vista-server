@@ -79,11 +79,11 @@ async function run() {
       }
     })
 
-    // Send a ping to confirm a successful connection
-    await client.db('admin').command({ ping: 1 })
-    console.log(
-      'Pinged your deployment. You successfully connected to MongoDB!'
-    )
+    // // Send a ping to confirm a successful connection
+    // await client.db('admin').command({ ping: 1 })
+    // console.log(
+    //   'Pinged your deployment. You successfully connected to MongoDB!'
+    // )
   } finally {
     // Ensures that the client will close when you finish/error
   }
@@ -153,6 +153,11 @@ app.post('/create-payment-host', async(req,res)=>{
     amount: amount,
     currency: "usd",
     payment_method_types:['card'],
+
+    // In the latest version of the API, specifying the `automatic_payment_methods` parameter is optional because Stripe enables its functionality by default.
+    // automatic_payment_methods: {
+    //   enabled: true,
+    // },
   });
 
   res.send({
@@ -344,7 +349,13 @@ app.put('/room/update/:id', verifyToken, verifyHost, async (req, res) => {
     (sum, booking) => sum + booking.price,
     0
   )
-  
+  // const data = [
+  //   ['Day', 'Sales'],
+  //   ['9/5', 1000],
+  //   ['10/2', 1170],
+  //   ['11/1', 660],
+  //   ['12/11', 1030],
+  // ]
   const chartData = bookingDetails.map(booking => {
     const day = new Date(booking.date).getDate()
     const month = new Date(booking.date).getMonth() + 1
